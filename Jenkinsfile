@@ -143,6 +143,18 @@ spec:
       volumeMounts:
         - mountPath: /var/lib/containers
           name: varlibcontainers
+    - name: trivy
+      image: docker.io/aquasec/trivy
+      tty: true
+      command: ["/bin/sh"]
+      workingDir: ${workingDir}
+      env:
+        - name: HOME
+          value: /home/devops
+        - name: ENVIRONMENT_NAME
+          value: ${namespace}
+        - name: BUILD_NUMBER
+          value: ${env.BUILD_NUMBER}             
     - name: ibmcloud
       image: docker.io/garagecatalyst/ibmcloud-dev:1.0.10
       tty: true
@@ -187,6 +199,28 @@ spec:
 """
 ) {
     node(buildLabel) {
+        container(name: 'trivy', shell: '/bin/sh') {
+          stage('Scan Image Demo') {
+                 sh '''#!/bin/sh
+
+                    echo "ScanImageDemo Before Trivy image scanning...."
+
+                    trivy --exit-code 1 --severity CRITICAL python:3.4-alpine
+                    my_exit_code=$?
+                    echo "RESULT 1:--- $my_exit_code"
+
+                    # Check scan results
+                    if [ ${my_exit_code} == 1 ]; then
+                        echo "Image scanning failed. Some vulnerabilities found"
+                        exit 1;
+                    else
+                        echo "Image is scanned Successfully. No vulnerabilities found"
+                    fi;
+
+                    echo "ScanImageDemo After Trivy image scanning...."
+                '''
+            }
+        }     
         container(name: 'jdk11', shell: '/bin/bash') {
             checkout scm
             stage('Setup') {
@@ -282,6 +316,75 @@ spec:
                     APP_IMAGE="${REGISTRY_URL}/${REGISTRY_NAMESPACE}/${IMAGE_NAME}:${IMAGE_VERSION}"
 
                     buildah bud --tls-verify=${TLSVERIFY} --format=docker -f ${DOCKERFILE} -t ${APP_IMAGE} ${CONTEXT}
+                '''
+            }
+        }
+        container(name: 'trivy', shell: '/bin/sh') {
+            stage('Scan image using trivy') {
+
+                  sh '''#!/bin/sh
+
+                    set -e
+                    . ./env-config
+
+		            echo TLSVERIFY=${TLSVERIFY}
+		            echo CONTEXT=${CONTEXT}
+
+		            if [[ -z "${REGISTRY_PASSWORD}" ]]; then
+		              REGISTRY_PASSWORD="${APIKEY}"
+		            fi
+
+                APP_IMAGE="${REGISTRY_URL}/${REGISTRY_NAMESPACE}/${IMAGE_NAME}:${IMAGE_VERSION}"
+
+                    echo "ScanImage Before Trivy image scanning....0"
+
+                    ibmcloud cr build -t  .
+
+                    trivy --exit-code 1 --severity CRITICAL python:3.4-alpine
+                    my_exit_code=$?
+                    echo "RESULT 0:--- $my_exit_code"
+
+                    # Test scanning ..... Check scan results
+                    if [ ${my_exit_code} == 1 ]; then
+                        echo "Image1 scanning failed. Some vulnerabilities found"
+                    else
+                        echo "Image1 is scanned Successfully. No vulnerabilities found"
+                    fi;
+
+                    echo "ScanImage Before Trivy image scanning.... $APP_IMAGE"
+
+                    # Real scanning ..... Check scan results
+                    trivy --exit-code 1 --severity HIGH,CRITICAL ${APP_IMAGE}
+                    my_exit_code=$?
+                    echo "RESULT 1:--- $my_exit_code"
+
+                    # Check scan results
+                    if [ ${my_exit_code} == 1 ]; then
+                        echo "Image scanning failed. Some vulnerabilities found"
+                        exit 1;
+                    else
+                        echo "Image is scanned Successfully. No vulnerabilities found"
+                    fi;
+
+                    echo "ScanImage After Trivy image scanning....0"
+                '''
+            }
+        }
+       container(name: 'buildah', shell: '/bin/bash') {
+            stage('Push image') {
+                sh '''#!/bin/bash
+                    set -e
+                    . ./env-config
+
+		            echo TLSVERIFY=${TLSVERIFY}
+		            echo CONTEXT=${CONTEXT}
+
+		            if [[ -z "${REGISTRY_PASSWORD}" ]]; then
+		              REGISTRY_PASSWORD="${APIKEY}"
+		            fi
+
+                    APP_IMAGE="${REGISTRY_URL}/${REGISTRY_NAMESPACE}/${IMAGE_NAME}:${IMAGE_VERSION}"
+
                     if [[ -n "${REGISTRY_USER}" ]] && [[ -n "${REGISTRY_PASSWORD}" ]]; then
                         buildah login -u "${REGISTRY_USER}" -p "${REGISTRY_PASSWORD}" "${REGISTRY_URL}"
                     fi
